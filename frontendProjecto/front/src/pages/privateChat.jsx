@@ -5,13 +5,14 @@ const PrivateChat = ({ otherUserId }) => {
   const [messages, setMessages] = useState([]);
   const [text, setText] = useState("");
 
+  const token = localStorage.getItem("token")
   const senderId = localStorage.getItem("user_id");
   const wsRef = useRef(null);
 
   useEffect(() => {
 
     const ws = new WebSocket(
-      `ws://127.0.0.1:8000/ws/chat/private/${senderId}/${otherUserId}/`
+      `ws://127.0.0.1:8000/ws/chat/private/${otherUserId}/?token=${token}`
     );
 
     ws.onopen = () => console.log("✅ WS conectado")
@@ -20,11 +21,17 @@ const PrivateChat = ({ otherUserId }) => {
       const data = JSON.parse(event.data);
       console.log("📩 Mensaje recibido:", data)
 
-      setMessages((prev) => [...prev, data])
+      if (data.is_history) {
+        setMessages(prev => [...prev, data])
+      }else{
+        setMessages(prev => [...prev, data])
+      }
     };
 
     ws.onclose = () => console.log("❌ WS cerrado")
     ws.onerror = (e) => console.log("WS error", e)
+
+    console.log(ws.url)
 
     setSocket(ws);
 

@@ -1,16 +1,24 @@
 import json
 from channels.generic.websocket import AsyncWebsocketConsumer
+from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from channels.db import database_sync_to_async
 from asgiref.sync import sync_to_async
 from django.contrib.auth.models import User
 from .models import Conversation, Message
 
-class PrivateChatConsumer(AsyncWebsocketConsumer):
+class PrivateChatConsumer(AsyncJsonWebsocketConsumer):
     async def connect(self):
         print("🔥 WebSocket connect llamado")
         print("URL:", self.scope["path"])
 
-        self.user_id = int(self.scope["url_route"]["kwargs"]["sender_id"])
+        self.user = self.scope["user"]
+        print("👤 USER:", self.user)
+
+        if not self.user.is_authenticated:
+            await self.close()
+            return
+        
+        self.user_id = int(self.user.id)
         self.other_user_id = int(self.scope["url_route"]["kwargs"]["receiver_id"])
 
         self.room_group_name = f"private_chat_{min(self.user_id, self.other_user_id)}_{max(self.user_id, self.other_user_id)}"
@@ -26,6 +34,17 @@ class PrivateChatConsumer(AsyncWebsocketConsumer):
         )
 
         await self.accept()
+
+        messages = await self.get_chat_history()
+
+        for msg in messages:
+            await self.send_json({
+                "type":"chat_message",
+                "message": msg.content,
+                "sender_id": msg.sender_id,
+                "timestamp": msg.timestamp.isoformat(),
+                "is_history": True,
+            })
 
         print("🔥 CONNECT OK", self.room_group_name)
 
@@ -92,4 +111,12 @@ class PrivateChatConsumer(AsyncWebsocketConsumer):
             conversation_id=conversation,
             sender_id=user_id,
             content=content,
+        )
+
+    @database_sync_to_async
+    def get_chat_history(self, limit=50):
+        return list(
+            self.conversation.messages
+            .select_related("sender")
+            .order_by("timestamp")[:limit]
         )

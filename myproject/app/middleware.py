@@ -1,32 +1,29 @@
 from urllib.parse import parse_qs
 from django.contrib.auth.models import AnonymousUser
-from channels.middleware import BaseMiddleware
 from channels.db import database_sync_to_async
-from rest_framework_simplejwt.authentication import JWTAuthentication
-from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
+from channels.middleware import BaseMiddleware
+from rest_framework.authtoken.models import Token
 
-class JWTAuthMiddleware(BaseMiddleware):
-
+class TokenAuthMiddleware(BaseMiddleware):
     async def __call__(self, scope, receive, send):
-        query_string = scope["query_string"].decode()
+        scope["user"] = AnonymousUser()
+
+        query_string = scope.get("query_string",b"").decode()
         params = parse_qs(query_string)
 
-        token = params.get("token")
+        token_key = params.get("token",[None])[0]
 
-        if token:
-            token = token[0]
-            user = await self.get_user(token)
-            scope["user"] = user
-        else:
-            scope["user"] = AnonymousUser()
+        if token_key:
+            user = await self.get_user(token_key)
+            if user:
+                scope["user"] = user
 
-        return await super().__call__(scope, receive, send)
-
+        return await super().__call__(scope,receive,send)
+    
     @database_sync_to_async
-    def get_user(self, token):
-        jwt_auth = JWTAuthentication()
+    def get_user(self,token_key):
         try:
-            validated_token = jwt_auth.get_validated_token(token)
-            return jwt_auth.get_user(validated_token)
-        except (InvalidToken, TokenError):
-            return AnonymousUser()
+            token = Token.objects.select_related("user").get(key=token_key)
+            return token.user
+        except Token.DoesNotExist:
+            return None
