@@ -35,7 +35,7 @@ class PrivateChatConsumer(AsyncJsonWebsocketConsumer):
 
         await self.accept()
 
-        messages = await self.get_chat_history()
+        messages = await self.get_chat_history(offset=0, limit=15)
 
         for msg in messages:
             await self.send_json({
@@ -114,9 +114,28 @@ class PrivateChatConsumer(AsyncJsonWebsocketConsumer):
         )
 
     @database_sync_to_async
-    def get_chat_history(self, limit=50):
-        return list(
+    def get_chat_history(self, offset=0, limit=15):
+
+        qs = (
             self.conversation.messages
             .select_related("sender")
-            .order_by("timestamp")[:limit]
+            .order_by("-timestamp")
         )
+        message = list(qs[offset : offset + limit])
+
+        return message[::-1]
+    
+    async def receive_json(self, content):
+        if content["type"] == "load more":
+            offset = content.get("offset",0)
+
+            messages = await self.get_chat_history(offset=offset)
+
+            for msg in messages:
+                await self.send_json({
+                    "type": "chat_message",
+                    "message": msg.content,
+                    "sender_id": msg.sender_id,
+                    "timestamp": msg.timestamp.isoformat(),
+                    "is_history": True,
+                })
