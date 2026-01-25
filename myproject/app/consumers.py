@@ -35,7 +35,7 @@ class PrivateChatConsumer(AsyncJsonWebsocketConsumer):
 
         await self.accept()
 
-        messages = await self.get_chat_history(offset=0, limit=15)
+        messages, _ = await self.get_chat_history(offset=0, limit=15)
 
         for msg in messages:
             await self.send_json({
@@ -60,20 +60,53 @@ class PrivateChatConsumer(AsyncJsonWebsocketConsumer):
     async def receive(self, text_data):
         try:
             data = json.loads(text_data)
-            message = data["message"]
 
-            print("📩 receive:", text_data)
+            print("🔍 RECEIVE_JSON LLAMADO:", data)
 
-            await self.save_message(self.conversation.id, self.user_id, message)
+            if data.get("type") == "load_more":
+                offset = data.get("offset",0)
+                limit = data.get("limit",15)
 
-            await self.channel_layer.group_send(
-                self.room_group_name,
-                {
-                    "type": "chat_message",
-                    "message": message,
-                    "sender_id": self.user_id
-                }
-            )
+                print(f"📦 Cargando mensajes: offset={offset}, limit={limit}")
+
+                messages, has_more = await self.get_chat_history(offset=offset, limit=limit)
+
+                print(f"✅ Mensajes obtenidos: {len(messages)}")
+                print(f"🔍 has_more: {has_more}")
+
+                await self.send_json({
+                    "type": "history_batch",
+                    "messages": [
+                        {
+                            "message":msg.content,
+                            "sender_id": msg.sender_id,
+                            "timestamp": msg.timestamp.isoformat(),
+                            "id": msg.id
+                        } for msg in messages
+                    ],
+                    "has_more": has_more
+                })
+                print("📤 history_batch enviado")
+                return
+
+            if "message" in data:
+                message = data["message"]
+
+                print("📩 receive:", text_data)
+
+                saved_msg = await self.save_message(self.conversation.id, self.user_id, message)
+
+                await self.channel_layer.group_send(
+                    self.room_group_name,
+                    {
+                        "type": "chat_message",
+                        "message": message,
+                        "sender_id": self.user_id,
+                        "timestamp": saved_msg.timestamp.isoformat(),
+                        "id": saved_msg.id
+                    }
+                )
+
         except Exception as e:
             print("❌ ERROR EN receive:", e)
             await self.close()
@@ -81,9 +114,15 @@ class PrivateChatConsumer(AsyncJsonWebsocketConsumer):
     async def chat_message(self, event):
         try:
             print("📤 chat_message:", event)
+
+            import datetime
+            timestamp = event.get("timestamp", datetime.datetime.now().isoformat())
+
             await self.send(text_data=json.dumps({
                 "message": event["message"],
                 "sender_id": event["sender_id"],
+                "timestamp": timestamp,
+                "is_history": False
             }))
         except Exception as e:
             print("❌ ERROR EN chat_message:", e)
@@ -112,6 +151,7 @@ class PrivateChatConsumer(AsyncJsonWebsocketConsumer):
             sender_id=user_id,
             content=content,
         )
+        return message
 
     @database_sync_to_async
     def get_chat_history(self, offset=0, limit=15):
@@ -121,21 +161,11 @@ class PrivateChatConsumer(AsyncJsonWebsocketConsumer):
             .select_related("sender")
             .order_by("-timestamp")
         )
+        total_count = qs.count()
+
         message = list(qs[offset : offset + limit])
 
-        return message[::-1]
+        has_more = offset + len(message) < total_count
+
+        return message[::-1], has_more
     
-    async def receive_json(self, content):
-        if content["type"] == "load more":
-            offset = content.get("offset",0)
-
-            messages = await self.get_chat_history(offset=offset)
-
-            for msg in messages:
-                await self.send_json({
-                    "type": "chat_message",
-                    "message": msg.content,
-                    "sender_id": msg.sender_id,
-                    "timestamp": msg.timestamp.isoformat(),
-                    "is_history": True,
-                })
